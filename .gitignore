@@ -1,0 +1,11 @@
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Go
+/food-platform
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
