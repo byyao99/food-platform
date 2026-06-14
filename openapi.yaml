@@ -1,0 +1,646 @@
+openapi: 3.0.3
+info:
+  title: Food Platform API
+  version: "1.0.0"
+  description: |
+    REST API for the Food Platform: a menu + order service with role-based access
+    control. Built with Go + Gin, persisted to SQLite via GORM.
+
+    ## Conventions
+    - **Money is integer cents.** All monetary fields (`price`, `unit_price`,
+      `subtotal`, `total_amount`) are `int64` cents (e.g. `18000` == $180.00).
+    - **Response envelope.** Single resources are returned as `{ "data": ... }`.
+      List endpoints add a sibling `{ "pagination": { limit, offset, total } }`.
+      Errors are `{ "error": "message" }`.
+    - **Pagination & sorting.** List endpoints accept `limit` (default 20, max
+      100), `offset`, `sort`, and `order` (`asc`/`desc`). `sort` is validated
+      against a per-resource allowlist; unknown values fall back to the default.
+
+    ## Authentication
+    Obtain a bearer token from `POST /auth/login` or `POST /auth/register`, then
+    send it as `Authorization: Bearer <token>`. Tokens are HMAC-signed and expire
+    after 24 hours.
+
+    ## Roles
+    - `customer` — place and view their own orders.
+    - `staff` — everything a customer can do, plus manage the order queue.
+    - `admin` — full access, including the menu and user management.
+
+servers:
+  - url: http://localhost:8080
+    description: Local backend
+  - url: http://localhost:5173
+    description: Vite dev server (proxies /api to the backend)
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Users
+  - name: Menu
+  - name: Orders
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns service status; also verifies the database connection.
+      security: []
+      responses:
+        "200":
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        "503":
+          description: Database unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: unavailable }
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new account
+      description: Always creates a **customer**; clients cannot self-assign a privileged role.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "201":
+          description: Account created; returns a bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: Authenticated; returns a bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthEnvelope"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: Invalid credentials (same response for unknown user or wrong password).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: Admin only.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Order"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [username, role, created_at, updated_at]
+            default: created_at
+      responses:
+        "200":
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Pagination"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Users]
+      summary: Create a user with an explicit role
+      description: Admin only. Unlike self-registration, this may create `staff` and `admin` accounts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/v1/users/{id}/role:
+    put:
+      tags: [Users]
+      summary: Change a user's role
+      description: Admin only. An admin cannot change their own role.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRoleRequest"
+      responses:
+        "200":
+          description: Updated user.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Forbidden (not an admin, or attempting to change your own role).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/users/{id}:
+    delete:
+      tags: [Users]
+      summary: Delete a user
+      description: Admin only. An admin cannot delete their own account.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "204": { description: Deleted (no content). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Forbidden (not an admin, or attempting to delete your own account).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/menu:
+    get:
+      tags: [Menu]
+      summary: List menu items
+      description: Public.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Order"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, price, category, available, created_at, updated_at]
+            default: created_at
+      responses:
+        "200":
+          description: A page of menu items.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Pagination"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MenuItem" }
+    post:
+      tags: [Menu]
+      summary: Create a menu item
+      description: Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MenuItemRequest"
+      responses:
+        "201":
+          description: Created menu item.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MenuItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/v1/menu/{id}:
+    get:
+      tags: [Menu]
+      summary: Get a menu item
+      description: Public.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The menu item.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MenuItem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Menu]
+      summary: Update a menu item
+      description: Admin only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MenuItemRequest"
+      responses:
+        "200":
+          description: Updated menu item.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MenuItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Menu]
+      summary: Delete a menu item
+      description: Admin only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "204": { description: Deleted (no content). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/orders:
+    get:
+      tags: [Orders]
+      summary: List all orders
+      description: Staff or admin only.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Order"
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [customer_name, total_amount, status, created_at, updated_at]
+            default: created_at
+      responses:
+        "200":
+          description: A page of orders (newest first by default).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Pagination"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Orders]
+      summary: Place an order
+      description: |
+        Any authenticated user. Pricing is **server-authoritative**: the client
+        sends only `menu_item_id` + `quantity`; the server looks up each item,
+        rejects unknown or unavailable items, and computes `unit_price`,
+        `subtotal`, and `total_amount`. Each line stores a name/price snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Created order (status `pending`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "400":
+          description: Validation failed, or a referenced item is unknown/unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/orders/{id}:
+    get:
+      tags: [Orders]
+      summary: Get an order
+      description: Any authenticated user.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Orders]
+      summary: Update an order's status and note
+      description: |
+        Staff or admin only. Only `status` and `note` may change — line items are
+        immutable after creation. Status changes are validated by a state machine:
+        `pending → preparing → ready → completed`, with `cancelled` reachable from
+        any non-terminal state. `completed` and `cancelled` are terminal. Illegal
+        transitions return 400.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderRequest"
+      responses:
+        "200":
+          description: Updated order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Order" }
+        "400":
+          description: Invalid status or illegal transition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Orders]
+      summary: Delete an order
+      description: Staff or admin only. Removes the order and its line items.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "204": { description: Deleted (no content). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: HMAC-signed bearer token from /auth/login or /auth/register.
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Page size (default 20, max 100).
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Offset:
+      name: offset
+      in: query
+      description: Number of records to skip.
+      schema: { type: integer, minimum: 0, default: 0 }
+    Order:
+      name: order
+      in: query
+      schema: { type: string, enum: [asc, desc] }
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Malformed request body or parameters.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing, malformed, or expired bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated, but the role lacks permission.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Conflict (e.g. username already taken).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string, example: resource not found }
+
+    Pagination:
+      type: object
+      properties:
+        pagination:
+          type: object
+          properties:
+            limit: { type: integer, example: 20 }
+            offset: { type: integer, example: 0 }
+            total: { type: integer, example: 42 }
+
+    Role:
+      type: string
+      enum: [customer, staff, admin]
+
+    OrderStatus:
+      type: string
+      enum: [pending, preparing, ready, completed, cancelled]
+
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 60 }
+        password: { type: string, minLength: 8, maxLength: 200, format: password }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AuthEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            token: { type: string }
+            user: { $ref: "#/components/schemas/User" }
+
+    CreateUserRequest:
+      type: object
+      required: [username, password, role]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 60 }
+        password: { type: string, minLength: 8, maxLength: 200, format: password }
+        role: { $ref: "#/components/schemas/Role" }
+
+    UpdateRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+
+    MenuItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        price: { type: integer, format: int64, description: Price in cents. }
+        category: { type: string }
+        available: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MenuItemRequest:
+      type: object
+      required: [name, price, category]
+      properties:
+        name: { type: string, maxLength: 120 }
+        description: { type: string, maxLength: 500 }
+        price: { type: integer, format: int64, minimum: 1, description: Price in cents (> 0). }
+        category: { type: string, maxLength: 60 }
+        available:
+          type: boolean
+          default: true
+          description: Optional; defaults to true when omitted.
+
+    OrderItem:
+      type: object
+      description: A line in an order, with a name/price snapshot taken at order time.
+      properties:
+        menu_item_id: { type: string, format: uuid }
+        name: { type: string }
+        unit_price:
+          type: integer
+          format: int64
+          description: "Cents, snapshot at order time."
+        quantity: { type: integer, minimum: 1 }
+        subtotal:
+          type: integer
+          format: int64
+          description: "unit_price × quantity, in cents."
+
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        customer_name: { type: string }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderItem" }
+        total_amount: { type: integer, format: int64, description: Cents. }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    OrderItemRequest:
+      type: object
+      required: [menu_item_id, quantity]
+      properties:
+        menu_item_id: { type: string }
+        quantity: { type: integer, minimum: 1 }
+
+    CreateOrderRequest:
+      type: object
+      required: [customer_name, items]
+      properties:
+        customer_name: { type: string, maxLength: 120 }
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/OrderItemRequest" }
+        note: { type: string, maxLength: 500 }
+
+    UpdateOrderRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        note: { type: string, maxLength: 500 }
+
+security:
+  - bearerAuth: []

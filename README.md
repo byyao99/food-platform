@@ -30,29 +30,54 @@ The SQLite file and its schema are created automatically on first run (GORM `Aut
 
 ## API endpoints
 
-Base URL: `http://localhost:8080/api/v1`
+Base URL: `http://localhost:8080/api/v1`. The full machine-readable contract
+lives in [`openapi.yaml`](openapi.yaml) (OpenAPI 3.0); the tables below are a
+summary. The **Access** column lists who may call each endpoint: _public_ (no
+token), _auth_ (any signed-in user), or a specific role.
+
+List endpoints (`GET /menu`, `/orders`, `/users`) accept `?limit` (default 20,
+max 100), `?offset`, `?sort`, and `?order` (`asc`/`desc`), and return a
+`pagination` block alongside `data`.
+
+### Auth
+
+| Method | Path             | Access | Description                                  |
+|--------|------------------|--------|----------------------------------------------|
+| POST   | `/auth/register` | public | Register a new **customer**; returns a token |
+| POST   | `/auth/login`    | public | Log in; returns a bearer token               |
+
+Send the token as `Authorization: Bearer <token>` on protected endpoints.
 
 ### Menu
 
-| Method | Path          | Description       |
-|--------|---------------|-------------------|
-| GET    | `/menu`       | List all items    |
-| POST   | `/menu`       | Create an item    |
-| GET    | `/menu/:id`   | Get a single item |
-| PUT    | `/menu/:id`   | Update an item    |
-| DELETE | `/menu/:id`   | Delete an item    |
+| Method | Path        | Access | Description       |
+|--------|-------------|--------|-------------------|
+| GET    | `/menu`     | public | List items        |
+| GET    | `/menu/:id` | public | Get a single item |
+| POST   | `/menu`     | admin  | Create an item    |
+| PUT    | `/menu/:id` | admin  | Update an item    |
+| DELETE | `/menu/:id` | admin  | Delete an item    |
 
 ### Orders
 
-| Method | Path           | Description                      |
-|--------|----------------|----------------------------------|
-| GET    | `/orders`      | List all orders (newest first)   |
-| POST   | `/orders`      | Create an order                  |
-| GET    | `/orders/:id`  | Get a single order               |
-| PUT    | `/orders/:id`  | Update order status and note     |
-| DELETE | `/orders/:id`  | Delete an order                  |
+| Method | Path          | Access       | Description                        |
+|--------|---------------|--------------|------------------------------------|
+| POST   | `/orders`     | auth         | Place an order (pricing server-side) |
+| GET    | `/orders/:id` | auth         | Get a single order                 |
+| GET    | `/orders`     | staff, admin | List all orders (newest first)     |
+| PUT    | `/orders/:id` | staff, admin | Update order status and note       |
+| DELETE | `/orders/:id` | staff, admin | Delete an order                    |
 
-Also: `GET /health` for a health check.
+### Users
+
+| Method | Path               | Access | Description                              |
+|--------|--------------------|--------|------------------------------------------|
+| GET    | `/users`           | admin  | List users                               |
+| POST   | `/users`           | admin  | Create a user with an explicit role      |
+| PUT    | `/users/:id/role`  | admin  | Change a user's role (not your own)      |
+| DELETE | `/users/:id`       | admin  | Delete a user (not your own)             |
+
+Also: `GET /health` (public) for a health check.
 
 ## Examples
 
