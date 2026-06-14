@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { menuApi, orderApi } from '../api/client'
 import { statusOptions } from '../types'
 import { formatCents } from '../money'
+import { isStaff } from '../session'
 import PaginationBar from '../components/PaginationBar.vue'
 import type { MenuItem, Order, OrderItemInput, OrderStatus } from '../types'
 
@@ -15,6 +16,7 @@ const offset = ref(0)
 const menu = ref<MenuItem[]>([])
 const loading = ref(false)
 const error = ref('')
+const success = ref('')
 
 interface DraftLine {
   menu_item_id: string
@@ -56,16 +58,18 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [orderPage, menuPage] = await Promise.all([
-      orderApi.list(PAGE_SIZE, offset.value),
-      menuApi.list(MENU_FETCH_LIMIT, 0),
-    ])
-    orders.value = orderPage.items
-    total.value = orderPage.pagination.total
+    // Everyone needs the menu to build an order; only staff may list all orders.
+    const menuPage = await menuApi.list(MENU_FETCH_LIMIT, 0)
     menu.value = menuPage.items
-    if (orders.value.length === 0 && offset.value > 0) {
-      offset.value = Math.max(0, offset.value - PAGE_SIZE)
-      await load()
+
+    if (isStaff.value) {
+      const orderPage = await orderApi.list(PAGE_SIZE, offset.value)
+      orders.value = orderPage.items
+      total.value = orderPage.pagination.total
+      if (orders.value.length === 0 && offset.value > 0) {
+        offset.value = Math.max(0, offset.value - PAGE_SIZE)
+        await load()
+      }
     }
   } catch (e) {
     error.value = (e as Error).message
@@ -81,6 +85,7 @@ function changePage(newOffset: number) {
 
 async function createOrder() {
   error.value = ''
+  success.value = ''
   const items: OrderItemInput[] = draft.lines
     .filter((l) => l.menu_item_id && l.quantity > 0)
     .map((l) => ({ menu_item_id: l.menu_item_id, quantity: l.quantity }))
@@ -97,8 +102,13 @@ async function createOrder() {
   try {
     await orderApi.create({ customer_name: draft.customer_name, note: draft.note, items })
     resetDraft()
-    offset.value = 0 // newest order appears on the first page
-    await load()
+    if (isStaff.value) {
+      offset.value = 0 // newest order appears on the first page
+      await load()
+    } else {
+      // Customers cannot list orders, so confirm the placement inline instead.
+      success.value = 'Your order has been placed!'
+    }
   } catch (e) {
     error.value = (e as Error).message
   }
@@ -136,6 +146,7 @@ onMounted(load)
 <template>
   <div>
     <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="success" class="success">{{ success }}</p>
 
     <section class="card">
       <h2 class="section-title">New Order</h2>
@@ -175,7 +186,7 @@ onMounted(load)
       </form>
     </section>
 
-    <section class="card">
+    <section v-if="isStaff" class="card">
       <h2 class="section-title">Orders ({{ total }})</h2>
       <p v-if="loading" class="muted">Loading…</p>
       <p v-else-if="orders.length === 0" class="muted">No orders yet.</p>

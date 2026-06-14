@@ -2,12 +2,13 @@ package handlers
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"food-platform/internal/middleware"
 	"food-platform/internal/store"
 )
 
@@ -23,7 +24,12 @@ func respondStoreError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "resource not found"})
 		return
 	}
-	log.Printf("store error on %s %s: %v", c.Request.Method, c.Request.URL.Path, err)
+	slog.Error("store error",
+		slog.String(middleware.RequestIDKey, middleware.RequestIDFromContext(c)),
+		slog.String("method", c.Request.Method),
+		slog.String("path", c.Request.URL.Path),
+		slog.Any("error", err),
+	)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 }
 

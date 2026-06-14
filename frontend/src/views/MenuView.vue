@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { menuApi } from '../api/client'
 import { formatCents, fromCents, toCents } from '../money'
+import { isAdmin } from '../session'
 import PaginationBar from '../components/PaginationBar.vue'
 import type { MenuItem, MenuItemInput } from '../types'
 
@@ -101,7 +102,7 @@ onMounted(load)
   <div>
     <p v-if="error" class="error">{{ error }}</p>
 
-    <section class="card">
+    <section v-if="isAdmin" class="card">
       <h2 class="section-title">{{ editingId ? 'Edit Menu Item' : 'New Menu Item' }}</h2>
       <form @submit.prevent="submit">
         <div class="grid">
@@ -150,7 +151,7 @@ onMounted(load)
             <th>Category</th>
             <th>Price</th>
             <th>Status</th>
-            <th></th>
+            <th v-if="isAdmin"></th>
           </tr>
         </thead>
         <tbody>
@@ -166,7 +167,7 @@ onMounted(load)
                 {{ item.available ? 'Available' : 'Unavailable' }}
               </span>
             </td>
-            <td class="row-actions">
+            <td v-if="isAdmin" class="row-actions">
               <button class="btn-secondary" @click="startEdit(item)">Edit</button>
               <button class="btn-danger" @click="remove(item)">Delete</button>
             </td>

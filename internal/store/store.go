@@ -55,6 +55,11 @@ var orderSortColumns = map[string]bool{
 	"created_at": true, "updated_at": true,
 }
 
+// userSortColumns are the columns admins may sort the user list by.
+var userSortColumns = map[string]bool{
+	"username": true, "role": true, "created_at": true, "updated_at": true,
+}
+
 // Store persists menu items and orders in a SQLite database via GORM.
 type Store struct {
 	db *gorm.DB
@@ -64,12 +69,13 @@ type Store struct {
 // dsn is typically a file path such as "food-platform.db".
 func Open(dsn string) (*Store, error) {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger:         logger.Default.LogMode(logger.Warn),
+		TranslateError: true, // surface gorm.ErrDuplicatedKey etc. as typed errors
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&models.MenuItem{}, &models.Order{}, &models.OrderItem{}); err != nil {
+	if err := db.AutoMigrate(&models.MenuItem{}, &models.Order{}, &models.OrderItem{}, &models.User{}); err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil

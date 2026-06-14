@@ -2,6 +2,24 @@
 // All monetary fields (`price`, `unit_price`, `subtotal`, `total_amount`) are
 // integer cents; use the helpers in `money.ts` to convert for display/input.
 
+export type Role = 'customer' | 'staff' | 'admin'
+
+export const ROLES: Role[] = ['customer', 'staff', 'admin']
+
+export interface AuthUser {
+  id: string
+  username: string
+  role: Role
+  created_at?: string
+  updated_at?: string
+}
+
+// Response from /auth/login and /auth/register.
+export interface AuthResponse {
+  token: string
+  user: AuthUser
+}
+
 export interface MenuItem {
   id: string
   name: string

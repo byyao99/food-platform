@@ -2,6 +2,37 @@ package models
 
 import "time"
 
+// Role is a user's authorization level. Privileges are cumulative in intent
+// (admin ⊇ staff ⊇ customer), but membership is checked explicitly per route.
+type Role string
+
+const (
+	RoleCustomer Role = "customer" // can place and view orders
+	RoleStaff    Role = "staff"    // kitchen/front desk: can manage orders
+	RoleAdmin    Role = "admin"    // full access, including the menu
+)
+
+// Valid reports whether r is a recognized role.
+func (r Role) Valid() bool {
+	switch r {
+	case RoleCustomer, RoleStaff, RoleAdmin:
+		return true
+	default:
+		return false
+	}
+}
+
+// User is an authenticated account. PasswordHash holds a bcrypt hash and is
+// never exposed in API responses.
+type User struct {
+	ID           string    `gorm:"primaryKey" json:"id"`
+	Username     string    `gorm:"uniqueIndex" json:"username"`
+	PasswordHash string    `json:"-"`
+	Role         Role      `json:"role"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 // MenuItem represents a single dish on the menu.
 //
 // Monetary amounts are stored as integer cents (e.g. 18000 == $180.00) to

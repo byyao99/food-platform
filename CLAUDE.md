@@ -14,7 +14,10 @@ Backend (run from repo root):
 go run .                    # start API on :8080 (PORT env var overrides)
 go build ./...              # build
 go vet ./...                # vet
+go test ./...               # run the test suite
 ```
+
+Backend env vars: `PORT` (default 8080), `DB_PATH` (default `food-platform.db`), `AUTH_SECRET` (HMAC key for bearer tokens — if unset a random key is generated at startup, so tokens do not survive a restart; set it in any real deployment), and `ADMIN_USERNAME`/`ADMIN_PASSWORD` (when both set and no users exist yet, an admin account is seeded on startup).
 
 Frontend (run from `frontend/`):
 
@@ -43,7 +46,13 @@ To work on the full stack, run the backend and `npm run dev` simultaneously; the
 
 **API response shape:** single resources are `{"data": ...}`, errors `{"error": "..."}`, lists add a sibling `pagination` block. `respondStoreError` (in `handlers/common.go`) maps `ErrNotFound`→404 and logs+500s everything else.
 
-**Frontend** is a two-view SPA (vue-router: `/menu`, `/orders`) plus a shared `components/PaginationBar.vue`. `frontend/src/types.ts` mirrors the Go models and is the contract between the two halves — keep it in sync when changing JSON shapes. `api/client.ts` is the only place that talks HTTP; views call `menuApi` / `orderApi` and hold their own local state. In `OrdersView`, the menu dropdown fetches a large page (limit 100) to list all available items, while the orders list itself is paginated.
+**Authentication & authorization.** Accounts live in a `users` table (`internal/models` `User`, bcrypt `PasswordHash`, `Role` of `customer`/`staff`/`admin`). `internal/auth` provides bcrypt helpers and a `Manager` that issues/verifies stateless bearer tokens — base64url JSON claims joined by `.` to an HMAC-SHA256 signature (key from `AUTH_SECRET`), so verification needs no DB lookup. `POST /api/v1/auth/register` always creates a **customer** (clients can never self-assign a privileged role), `POST /api/v1/auth/login` returns a token. Privileged accounts come from two paths: the startup seed (`ADMIN_USERNAME`/`ADMIN_PASSWORD`) and the admin-only `/api/v1/users` endpoints (`handlers.UserHandler`): `POST` (provision with an explicit `role`), `GET` (paginated list), `PUT /:id/role` (change role), `DELETE /:id`. An admin cannot change or delete **their own** account (guarded in the handler via the token's user ID from `middleware.ContextUserIDKey`), so they can't lock themselves out. Middleware in `internal/middleware/auth.go` enforces access: `RequireAuth` (any valid token) and `RequireRole(...)` (401 if unauthenticated, 403 if the role isn't allowed); both stash the identity in the Gin context. Route gating (in `router.go`): menu reads are public, menu writes are admin-only; order create/get need any authenticated user; order list/update/delete need staff or admin; all `/users` routes need admin.
+
+**Logging & request IDs.** `main.go` configures a JSON `slog` logger as the default. `internal/middleware` adds `RequestID` (reuses an inbound `X-Request-ID` or generates a UUID, stores it under `middleware.RequestIDKey`, and echoes it back) and `Logger` (one structured record per request: method, path, status, latency, client IP, request id). The router uses `gin.New()` + these + `gin.Recovery()` instead of `gin.Default()`. `respondStoreError` logs 500s via `slog` including the request id — never `log.Printf`.
+
+**Frontend auth.** `frontend/src/session.ts` is the dependency-free source of truth for the bearer token + current user (mirrored to `localStorage`, exposed as reactive `isAuthenticated`/`isAdmin`/`isStaff`). `api/client.ts` attaches `Authorization: Bearer <token>` to every request and calls `clearSession()` on any 401; it also exposes `authApi` (login/register) and `userApi` (admin create). `LoginView.vue` (route `/login`) handles sign-in/registration; the router guard in `router/index.ts` redirects unauthenticated users away from `requiresAuth` routes and non-admins away from `requiresAdmin` routes. The UI is role-aware: `MenuView` shows the create/edit form and row actions only to admins; `OrdersView` shows the order-management list only to staff/admin, while any authenticated user can place an order (customers get an inline confirmation since they cannot list orders); `UsersView.vue` (route `/users`, admin-only) lists users with inline role editing + delete and a create form, disabling those controls on the admin's own row to mirror the backend self-guard. When changing route protection or role gating, keep these mirrors of the backend rules in sync.
+
+**Frontend** is a four-view SPA (vue-router: `/menu`, `/orders`, `/users`, `/login`) plus a shared `components/PaginationBar.vue`. `frontend/src/types.ts` mirrors the Go models and is the contract between the two halves — keep it in sync when changing JSON shapes. `api/client.ts` is the only place that talks HTTP; views call `menuApi` / `orderApi` and hold their own local state. In `OrdersView`, the menu dropdown fetches a large page (limit 100) to list all available items, while the orders list itself is paginated.
 
 ## Conventions
 
