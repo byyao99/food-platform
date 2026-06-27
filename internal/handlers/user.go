@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -28,7 +29,7 @@ func NewUserHandler(s *store.Store) *UserHandler {
 // is gated to admins at the route level.
 type createUserRequest struct {
 	Username string      `json:"username" binding:"required,min=3,max=60"`
-	Password string      `json:"password" binding:"required,min=8,max=200"`
+	Password string      `json:"password" binding:"required,min=8,max=72"`
 	Role     models.Role `json:"role" binding:"required"`
 }
 
@@ -76,10 +77,20 @@ func (h *UserHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": user})
 }
 
-// List handles GET /api/v1/users (admin only).
+// List handles GET /api/v1/users (admin only). Optional ?role and ?q filter by
+// exact role and case-insensitive username substring respectively.
 func (h *UserHandler) List(c *gin.Context) {
 	opts := parseListOptions(c)
-	users, total, err := h.store.ListUsers(opts)
+	filter := store.UserFilter{Username: normalizeUsername(c.Query("q"))}
+	if role := c.Query("role"); role != "" {
+		r := models.Role(role)
+		if !r.Valid() {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid role"})
+			return
+		}
+		filter.Role = r
+	}
+	users, total, err := h.store.ListUsers(opts, filter)
 	if err != nil {
 		respondStoreError(c, err)
 		return
@@ -112,10 +123,19 @@ func (h *UserHandler) UpdateRole(c *gin.Context) {
 		return
 	}
 
-	user, err := h.store.UpdateUserRole(c.Param("id"), req.Role)
+	user, oldRole, err := h.store.UpdateUserRole(c.Param("id"), req.Role)
 	if err != nil {
 		respondStoreError(c, err)
 		return
+	}
+	if oldRole != user.Role {
+		slog.Info("user role changed",
+			slog.String(middleware.RequestIDKey, middleware.RequestIDFromContext(c)),
+			slog.String("actor_id", c.GetString(middleware.ContextUserIDKey)),
+			slog.String("target_id", user.ID),
+			slog.String("old_role", string(oldRole)),
+			slog.String("new_role", string(user.Role)),
+		)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": user})
 }
@@ -131,5 +151,46 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		respondStoreError(c, err)
 		return
 	}
+	slog.Info("user deleted",
+		slog.String(middleware.RequestIDKey, middleware.RequestIDFromContext(c)),
+		slog.String("actor_id", c.GetString(middleware.ContextUserIDKey)),
+		slog.String("target_id", c.Param("id")),
+	)
+	c.Status(http.StatusNoContent)
+}
+
+// resetPasswordRequest is the payload for an admin password reset.
+type resetPasswordRequest struct {
+	Password string `json:"password" binding:"required,min=8,max=72"`
+}
+
+// ResetPassword handles PUT /api/v1/users/:id/password (admin only). Unlike the
+// self-service change, no current password is required, so an admin can recover
+// a locked-out account.
+func (h *UserHandler) ResetPassword(c *gin.Context) {
+	var req resetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validatePassword(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		respondStoreError(c, err)
+		return
+	}
+	if err := h.store.UpdateUserPassword(c.Param("id"), hash); err != nil {
+		respondStoreError(c, err)
+		return
+	}
+	slog.Info("user password reset",
+		slog.String(middleware.RequestIDKey, middleware.RequestIDFromContext(c)),
+		slog.String("actor_id", c.GetString(middleware.ContextUserIDKey)),
+		slog.String("target_id", c.Param("id")),
+	)
 	c.Status(http.StatusNoContent)
 }

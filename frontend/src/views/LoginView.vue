@@ -55,7 +55,7 @@ async function submit() {
             type="password"
             required
             minlength="8"
-            maxlength="200"
+            maxlength="72"
             :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
           />
         </div>

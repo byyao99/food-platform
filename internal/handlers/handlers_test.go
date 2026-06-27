@@ -371,6 +371,131 @@ func TestUserListRoleUpdateAndDelete(t *testing.T) {
 	}
 }
 
+func TestUserListFiltering(t *testing.T) {
+	e := setup(t)
+	admin := e.token(t, "admin", models.RoleAdmin)
+	e.token(t, "kitchen1", models.RoleStaff)
+	e.token(t, "kitchen2", models.RoleStaff)
+	e.token(t, "alice", models.RoleCustomer)
+
+	total := func(t *testing.T, path string) int {
+		t.Helper()
+		rec := e.do(t, http.MethodGet, path, nil, admin)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: got %d, want 200 (body: %s)", path, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Pagination struct {
+				Total int `json:"total"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.Pagination.Total
+	}
+
+	if got := total(t, "/api/v1/users?role=staff"); got != 2 {
+		t.Errorf("role=staff total: got %d, want 2", got)
+	}
+	if got := total(t, "/api/v1/users?q=alic"); got != 1 {
+		t.Errorf("q=alic total: got %d, want 1", got)
+	}
+	// An unknown role is rejected.
+	if rec := e.do(t, http.MethodGet, "/api/v1/users?role=superuser", nil, admin); rec.Code != http.StatusBadRequest {
+		t.Errorf("role=superuser: got %d, want 400", rec.Code)
+	}
+}
+
+func TestUpdateRoleToSameRoleIsNoOp(t *testing.T) {
+	e := setup(t)
+	admin := e.token(t, "admin", models.RoleAdmin)
+	e.token(t, "kitchen", models.RoleStaff)
+	staff, err := e.s.GetUserByUsername("kitchen")
+	if err != nil {
+		t.Fatalf("GetUserByUsername: %v", err)
+	}
+
+	// Setting the role it already has succeeds and leaves it unchanged.
+	rec := e.do(t, http.MethodPut, "/api/v1/users/"+staff.ID+"/role", map[string]any{"role": "staff"}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("same-role update: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var updated models.User
+	decodeData(t, rec, &updated)
+	if updated.Role != models.RoleStaff {
+		t.Errorf("role after no-op: got %s, want staff", updated.Role)
+	}
+}
+
+func TestSelfServiceChangePassword(t *testing.T) {
+	e := setup(t)
+	// token() seeds the account with password "password123".
+	tok := e.token(t, "alice", models.RoleCustomer)
+
+	// Unauthenticated -> 401.
+	body := map[string]any{"old_password": "password123", "new_password": "newpass123"}
+	if rec := e.do(t, http.MethodPut, "/api/v1/auth/password", body, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no token: got %d, want 401", rec.Code)
+	}
+
+	// Wrong current password -> 400 (deliberately not 401, which would log out).
+	wrong := map[string]any{"old_password": "nope12345", "new_password": "newpass123"}
+	if rec := e.do(t, http.MethodPut, "/api/v1/auth/password", wrong, tok); rec.Code != http.StatusBadRequest {
+		t.Errorf("wrong old password: got %d, want 400", rec.Code)
+	}
+
+	// Weak new password -> 400.
+	weak := map[string]any{"old_password": "password123", "new_password": "12345678"}
+	if rec := e.do(t, http.MethodPut, "/api/v1/auth/password", weak, tok); rec.Code != http.StatusBadRequest {
+		t.Errorf("weak new password: got %d, want 400", rec.Code)
+	}
+
+	// Valid change -> 204.
+	if rec := e.do(t, http.MethodPut, "/api/v1/auth/password", body, tok); rec.Code != http.StatusNoContent {
+		t.Fatalf("change password: got %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// New password logs in; old one no longer works.
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "alice", "password": "newpass123"}, ""); rec.Code != http.StatusOK {
+		t.Errorf("login with new password: got %d, want 200", rec.Code)
+	}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "alice", "password": "password123"}, ""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("login with old password: got %d, want 401", rec.Code)
+	}
+}
+
+func TestAdminResetPassword(t *testing.T) {
+	e := setup(t)
+	admin := e.token(t, "admin", models.RoleAdmin)
+	customer := e.token(t, "cust", models.RoleCustomer)
+	target, err := e.s.GetUserByUsername("cust")
+	if err != nil {
+		t.Fatalf("GetUserByUsername: %v", err)
+	}
+	body := map[string]any{"password": "resetpass1"}
+
+	// Non-admin -> 403.
+	if rec := e.do(t, http.MethodPut, "/api/v1/users/"+target.ID+"/password", body, customer); rec.Code != http.StatusForbidden {
+		t.Errorf("customer resetting: got %d, want 403", rec.Code)
+	}
+	// Unknown id -> 404.
+	if rec := e.do(t, http.MethodPut, "/api/v1/users/does-not-exist/password", body, admin); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown id: got %d, want 404", rec.Code)
+	}
+	// Weak password -> 400.
+	if rec := e.do(t, http.MethodPut, "/api/v1/users/"+target.ID+"/password", map[string]any{"password": "12345678"}, admin); rec.Code != http.StatusBadRequest {
+		t.Errorf("weak password: got %d, want 400", rec.Code)
+	}
+	// Valid reset -> 204, and the target can log in with the new password.
+	if rec := e.do(t, http.MethodPut, "/api/v1/users/"+target.ID+"/password", body, admin); rec.Code != http.StatusNoContent {
+		t.Fatalf("reset password: got %d, want 204 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/login", map[string]any{"username": "cust", "password": "resetpass1"}, ""); rec.Code != http.StatusOK {
+		t.Errorf("login after reset: got %d, want 200", rec.Code)
+	}
+}
+
 func TestAdminCannotActOnSelf(t *testing.T) {
 	e := setup(t)
 	admin := e.token(t, "admin", models.RoleAdmin)

@@ -39,6 +39,7 @@ func New(s *store.Store, am *auth.Manager, log *slog.Logger) *gin.Engine {
 		{
 			a.POST("/register", authH.Register)
 			a.POST("/login", authH.Login)
+			a.PUT("/password", middleware.RequireAuth(am), authH.ChangePassword)
 		}
 
 		// User management: admin-only. Provision accounts, list them, change
@@ -48,6 +49,7 @@ func New(s *store.Store, am *auth.Manager, log *slog.Logger) *gin.Engine {
 			u.GET("", user.List)
 			u.POST("", user.Create)
 			u.PUT("/:id/role", user.UpdateRole)
+			u.PUT("/:id/password", user.ResetPassword)
 			u.DELETE("/:id", user.Delete)
 		}
 

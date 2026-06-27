@@ -42,15 +42,35 @@ func (s *Store) CountUsers() (int64, error) {
 	return n, nil
 }
 
-// ListUsers returns a page of users, plus the total count. Defaults to
-// oldest-first by creation time.
-func (s *Store) ListUsers(opts ListOptions) ([]models.User, int64, error) {
+// UserFilter narrows a ListUsers query. Zero-value fields are ignored. Role
+// matches exactly; Username matches a case-insensitive substring (usernames are
+// stored normalized to lowercase).
+type UserFilter struct {
+	Role     models.Role
+	Username string
+}
+
+// ListUsers returns a page of users matching filter, plus the total count of
+// matches. Defaults to oldest-first by creation time.
+func (s *Store) ListUsers(opts ListOptions, filter UserFilter) ([]models.User, int64, error) {
+	apply := func(q *gorm.DB) *gorm.DB {
+		if filter.Role != "" {
+			q = q.Where("role = ?", filter.Role)
+		}
+		if filter.Username != "" {
+			q = q.Where("username LIKE ?", "%"+filter.Username+"%")
+		}
+		return q
+	}
+
 	var total int64
-	if err := s.db.Model(&models.User{}).Count(&total).Error; err != nil {
+	if err := apply(s.db.Model(&models.User{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	users := []models.User{}
-	q := s.db.Order(orderClause(opts, userSortColumns, "created_at", "asc")).Offset(opts.Offset)
+	q := apply(s.db.Model(&models.User{})).
+		Order(orderClause(opts, userSortColumns, "created_at", "asc")).
+		Offset(opts.Offset)
 	if opts.Limit > 0 {
 		q = q.Limit(opts.Limit)
 	}
@@ -69,18 +89,37 @@ func (s *Store) GetUser(id string) (models.User, error) {
 	return user, nil
 }
 
-// UpdateUserRole changes a user's role. It returns ErrNotFound if no such user
-// exists.
-func (s *Store) UpdateUserRole(id string, role models.Role) (models.User, error) {
-	user, err := s.GetUser(id)
+// UpdateUserRole changes a user's role, returning the updated user and its
+// previous role. When the requested role equals the current one it is a no-op
+// (no write) and the returned old role equals the new role, so callers can tell
+// nothing changed. It returns ErrNotFound if no such user exists.
+func (s *Store) UpdateUserRole(id string, role models.Role) (user models.User, oldRole models.Role, err error) {
+	user, err = s.GetUser(id)
 	if err != nil {
-		return models.User{}, err
+		return models.User{}, "", err
 	}
-	if err := s.db.Model(&user).Update("role", role).Error; err != nil {
-		return models.User{}, err
+	oldRole = user.Role
+	if oldRole == role {
+		return user, oldRole, nil
+	}
+	if err = s.db.Model(&user).Update("role", role).Error; err != nil {
+		return models.User{}, "", err
 	}
 	user.Role = role
-	return user, nil
+	return user, oldRole, nil
+}
+
+// UpdateUserPassword sets a user's bcrypt password hash. It returns ErrNotFound
+// if no such user exists.
+func (s *Store) UpdateUserPassword(id, hash string) error {
+	res := s.db.Model(&models.User{}).Where("id = ?", id).Update("password_hash", hash)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteUser removes a user, returning ErrNotFound if it does not exist.

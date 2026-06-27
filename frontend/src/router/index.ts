@@ -3,6 +3,7 @@ import MenuView from '../views/MenuView.vue'
 import OrdersView from '../views/OrdersView.vue'
 import LoginView from '../views/LoginView.vue'
 import UsersView from '../views/UsersView.vue'
+import AccountView from '../views/AccountView.vue'
 import { isAdmin, isAuthenticated } from '../session'
 
 export const router = createRouter({
@@ -12,6 +13,7 @@ export const router = createRouter({
     { path: '/menu', name: 'menu', component: MenuView },
     { path: '/orders', name: 'orders', component: OrdersView, meta: { requiresAuth: true } },
     { path: '/users', name: 'users', component: UsersView, meta: { requiresAuth: true, requiresAdmin: true } },
+    { path: '/account', name: 'account', component: AccountView, meta: { requiresAuth: true } },
     { path: '/login', name: 'login', component: LoginView },
   ],
 })

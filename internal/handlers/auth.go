@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"food-platform/internal/auth"
+	"food-platform/internal/middleware"
 	"food-platform/internal/models"
 	"food-platform/internal/store"
 )
@@ -26,7 +27,7 @@ func NewAuthHandler(s *store.Store, am *auth.Manager) *AuthHandler {
 // credentialsRequest is the shared payload for register and login.
 type credentialsRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=60"`
-	Password string `json:"password" binding:"required,min=8,max=200"`
+	Password string `json:"password" binding:"required,min=8,max=72"`
 }
 
 // Register handles POST /api/v1/auth/register. New accounts are always created
@@ -96,6 +97,54 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	h.issueToken(c, user, http.StatusOK)
+}
+
+// changePasswordRequest is the payload for a self-service password change.
+type changePasswordRequest struct {
+	OldPassword string `json:"old_password" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required,min=8,max=72"`
+}
+
+// ChangePassword handles PUT /api/v1/auth/password for the authenticated user.
+// It verifies the current password before setting the new one. Existing tokens
+// remain valid until they expire (tokens are stateless).
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	var req changePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validatePassword(req.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user, err := h.store.GetUser(c.GetString(middleware.ContextUserIDKey))
+	if err != nil {
+		respondStoreError(c, err)
+		return
+	}
+	// Use 400 (not 401) for a wrong current password: the request is already
+	// authenticated, and the frontend clears the session on any 401.
+	if !auth.CheckPassword(user.PasswordHash, req.OldPassword) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "current password is incorrect"})
+		return
+	}
+	if req.OldPassword == req.NewPassword {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "new password must differ from the current one"})
+		return
+	}
+
+	hash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		respondStoreError(c, err)
+		return
+	}
+	if err := h.store.UpdateUserPassword(user.ID, hash); err != nil {
+		respondStoreError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 // issueToken mints a token for the user and writes it with the user summary.

@@ -93,6 +93,11 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+  changePassword: (oldPassword: string, newPassword: string) =>
+    request<void>('/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    }),
 }
 
 export const userApi = {
@@ -104,6 +109,11 @@ export const userApi = {
     request<AuthUser>(`/users/${id}/role`, {
       method: 'PUT',
       body: JSON.stringify({ role }),
+    }),
+  resetPassword: (id: string, password: string) =>
+    request<void>(`/users/${id}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
     }),
   remove: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
 }

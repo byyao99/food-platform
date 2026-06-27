@@ -25,6 +25,34 @@ function resetForm() {
   Object.assign(form, { username: '', password: '', role: 'staff' })
 }
 
+// Inline password-reset state: the row currently being reset and its input.
+const resettingId = ref<string | null>(null)
+const resetValue = ref('')
+
+function startReset(user: AuthUser) {
+  resettingId.value = user.id
+  resetValue.value = ''
+  error.value = ''
+  success.value = ''
+}
+
+function cancelReset() {
+  resettingId.value = null
+  resetValue.value = ''
+}
+
+async function submitReset(user: AuthUser) {
+  error.value = ''
+  success.value = ''
+  try {
+    await userApi.resetPassword(user.id, resetValue.value)
+    success.value = `Password reset for ${user.username}.`
+    cancelReset()
+  } catch (e) {
+    error.value = (e as Error).message
+  }
+}
+
 // isSelf marks the signed-in admin, whose own account cannot be edited/deleted.
 function isSelf(user: AuthUser): boolean {
   return user.id === currentUser.value?.id
@@ -114,7 +142,7 @@ onMounted(load)
           </div>
           <div class="field">
             <label>Password</label>
-            <input v-model="form.password" type="password" required minlength="8" maxlength="200" />
+            <input v-model="form.password" type="password" required minlength="8" maxlength="72" />
           </div>
           <div class="field">
             <label>Role</label>
@@ -158,7 +186,22 @@ onMounted(load)
             </td>
             <td>{{ formatTime(user.created_at) }}</td>
             <td class="row-actions">
-              <button class="btn-danger" :disabled="isSelf(user)" @click="remove(user)">Delete</button>
+              <template v-if="resettingId === user.id">
+                <input
+                  v-model="resetValue"
+                  type="password"
+                  placeholder="New password"
+                  minlength="8"
+                  maxlength="72"
+                  class="reset-input"
+                />
+                <button class="btn-primary" @click="submitReset(user)">Save</button>
+                <button @click="cancelReset">Cancel</button>
+              </template>
+              <template v-else>
+                <button @click="startReset(user)">Reset password</button>
+                <button class="btn-danger" :disabled="isSelf(user)" @click="remove(user)">Delete</button>
+              </template>
             </td>
           </tr>
         </tbody>
@@ -183,6 +226,9 @@ onMounted(load)
 }
 td select {
   width: auto;
+}
+.reset-input {
+  width: 140px;
 }
 button:disabled {
   opacity: 0.5;

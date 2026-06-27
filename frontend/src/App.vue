@@ -21,7 +21,7 @@ function logout() {
       </nav>
       <div class="account">
         <template v-if="isAuthenticated && currentUser">
-          <span class="who">{{ currentUser.username }} <span class="role">{{ currentUser.role }}</span></span>
+          <RouterLink to="/account" class="who">{{ currentUser.username }} <span class="role">{{ currentUser.role }}</span></RouterLink>
           <button class="logout" @click="logout">Logout</button>
         </template>
         <RouterLink v-else to="/login" class="nav-link">Login</RouterLink>
@@ -61,6 +61,10 @@ function logout() {
 .who {
   color: #d1d5db;
   font-size: 14px;
+  text-decoration: none;
+}
+.who:hover {
+  color: #fff;
 }
 .role {
   display: inline-block;
