@@ -43,6 +43,15 @@ func (h *UserHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid role"})
 		return
 	}
+	req.Username = normalizeUsername(req.Username)
+	if len(req.Username) < minUsernameLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username must be at least 3 characters"})
+		return
+	}
+	if err := validatePassword(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {

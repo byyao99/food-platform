@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,7 +17,57 @@ import (
 const (
 	defaultLimit = 20
 	maxLimit     = 100
+
+	// minUsernameLen mirrors the binding tag, re-checked after normalization
+	// trims surrounding whitespace.
+	minUsernameLen = 3
+	// maxPasswordLen is bcrypt's working limit: it only hashes the first 72
+	// bytes, so anything longer gives a false sense of strength.
+	maxPasswordLen = 72
 )
+
+// normalizeUsername trims surrounding whitespace and lowercases the username so
+// that accounts are case- and whitespace-insensitive (Alice == alice == "alice ").
+func normalizeUsername(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// validatePassword enforces the account password rules shared by registration
+// and admin provisioning: at most 72 bytes (bcrypt's limit) and at least two of
+// {lowercase letter, uppercase letter, digit}. It returns nil when the password
+// is acceptable.
+func validatePassword(pw string) error {
+	if len(pw) > maxPasswordLen {
+		return fmt.Errorf("password must be at most %d bytes", maxPasswordLen)
+	}
+	if passwordClassCount(pw) < 2 {
+		return errors.New("password must contain at least two of: lowercase letter, uppercase letter, digit")
+	}
+	return nil
+}
+
+// passwordClassCount reports how many of these character classes appear in pw:
+// lowercase letters, uppercase letters, and digits.
+func passwordClassCount(pw string) int {
+	var hasLower, hasUpper, hasDigit bool
+	for _, r := range pw {
+		switch {
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		}
+	}
+	count := 0
+	for _, present := range []bool{hasLower, hasUpper, hasDigit} {
+		if present {
+			count++
+		}
+	}
+	return count
+}
 
 // respondStoreError maps a store-layer error to an appropriate HTTP response.
 // The underlying error is logged on the 500 path but never returned to clients.

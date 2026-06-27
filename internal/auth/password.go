@@ -19,3 +19,13 @@ func HashPassword(plaintext string) (string, error) {
 func CheckPassword(hash, plaintext string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext)) == nil
 }
+
+// dummyHash is a throwaway bcrypt hash used only by CompareDummy.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("timing-equalizer"), bcrypt.DefaultCost)
+
+// CompareDummy spends bcrypt-comparable CPU time without revealing a result.
+// Call it on the no-such-user path of login so a missing account takes about as
+// long as a wrong password, preventing username enumeration via response timing.
+func CompareDummy(plaintext string) {
+	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(plaintext))
+}

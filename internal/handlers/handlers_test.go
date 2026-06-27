@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -241,6 +242,48 @@ func TestRegisterAndLogin(t *testing.T) {
 	bad := map[string]any{"username": "alice", "password": "wrong-password"}
 	if rec := e.do(t, http.MethodPost, "/api/v1/auth/login", bad, ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("wrong password: got %d, want 401", rec.Code)
+	}
+}
+
+func TestRegisterPasswordValidation(t *testing.T) {
+	e := setup(t)
+
+	// Only digits -> one character class -> 400.
+	weak := map[string]any{"username": "bob", "password": "12345678"}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/register", weak, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("weak password: got %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Longer than bcrypt's 72-byte limit -> 400.
+	long := map[string]any{"username": "bob", "password": strings.Repeat("Ab1", 25)} // 75 bytes
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/register", long, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("over-long password: got %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Two classes within the limit -> 201.
+	ok := map[string]any{"username": "bob", "password": "password1"}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/register", ok, ""); rec.Code != http.StatusCreated {
+		t.Errorf("valid password: got %d, want 201 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUsernameNormalization(t *testing.T) {
+	e := setup(t)
+	creds := map[string]any{"username": "Alice", "password": "password1"}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/register", creds, ""); rec.Code != http.StatusCreated {
+		t.Fatalf("register Alice: got %d, want 201 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// A differently-cased, whitespace-padded variant is the same account -> 409.
+	dup := map[string]any{"username": " alice ", "password": "password1"}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/register", dup, ""); rec.Code != http.StatusConflict {
+		t.Errorf("duplicate variant: got %d, want 409 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Login is case-insensitive too.
+	login := map[string]any{"username": "ALICE", "password": "password1"}
+	if rec := e.do(t, http.MethodPost, "/api/v1/auth/login", login, ""); rec.Code != http.StatusOK {
+		t.Errorf("case-insensitive login: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

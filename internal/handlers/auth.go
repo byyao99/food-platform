@@ -38,6 +38,15 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Username = normalizeUsername(req.Username)
+	if len(req.Username) < minUsernameLen {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username must be at least 3 characters"})
+		return
+	}
+	if err := validatePassword(req.Password); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
@@ -71,10 +80,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user, err := h.store.GetUserByUsername(req.Username)
 	// Use the same response for an unknown user and a wrong password so the
-	// endpoint does not reveal which usernames exist.
-	if err != nil || !auth.CheckPassword(user.PasswordHash, req.Password) {
+	// endpoint does not reveal which usernames exist. Run a throwaway bcrypt
+	// comparison on the no-such-user path so the two cases take comparable time
+	// and timing does not leak which usernames exist either.
+	user, err := h.store.GetUserByUsername(normalizeUsername(req.Username))
+	if err != nil {
+		auth.CompareDummy(req.Password)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+	if !auth.CheckPassword(user.PasswordHash, req.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
