@@ -23,8 +23,7 @@ interface DraftLine {
   quantity: number
 }
 
-const draft = reactive<{ customer_name: string; note: string; lines: DraftLine[] }>({
-  customer_name: '',
+const draft = reactive<{ note: string; lines: DraftLine[] }>({
   note: '',
   lines: [{ menu_item_id: '', quantity: 1 }],
 })
@@ -49,7 +48,6 @@ function removeLine(index: number) {
 }
 
 function resetDraft() {
-  draft.customer_name = ''
   draft.note = ''
   draft.lines = [{ menu_item_id: '', quantity: 1 }]
 }
@@ -58,19 +56,20 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    // Everyone needs the menu to build an order; only staff may list all orders.
-    // Only available items can be ordered, so fetch just those.
+    // Everyone needs the menu to build an order; only available items can be
+    // ordered, so fetch just those.
     const menuPage = await menuApi.list(MENU_FETCH_LIMIT, 0, { available: true })
     menu.value = menuPage.items
 
-    if (isStaff.value) {
-      const orderPage = await orderApi.list(PAGE_SIZE, offset.value)
-      orders.value = orderPage.items
-      total.value = orderPage.pagination.total
-      if (orders.value.length === 0 && offset.value > 0) {
-        offset.value = Math.max(0, offset.value - PAGE_SIZE)
-        await load()
-      }
+    // Staff/admin see every order; customers see only their own.
+    const orderPage = isStaff.value
+      ? await orderApi.list(PAGE_SIZE, offset.value)
+      : await orderApi.listMine(PAGE_SIZE, offset.value)
+    orders.value = orderPage.items
+    total.value = orderPage.pagination.total
+    if (orders.value.length === 0 && offset.value > 0) {
+      offset.value = Math.max(0, offset.value - PAGE_SIZE)
+      await load()
     }
   } catch (e) {
     error.value = (e as Error).message
@@ -91,25 +90,17 @@ async function createOrder() {
     .filter((l) => l.menu_item_id && l.quantity > 0)
     .map((l) => ({ menu_item_id: l.menu_item_id, quantity: l.quantity }))
 
-  if (!draft.customer_name.trim()) {
-    error.value = 'Customer name is required.'
-    return
-  }
   if (items.length === 0) {
     error.value = 'Add at least one item.'
     return
   }
 
   try {
-    await orderApi.create({ customer_name: draft.customer_name, note: draft.note, items })
+    await orderApi.create({ note: draft.note, items })
     resetDraft()
-    if (isStaff.value) {
-      offset.value = 0 // newest order appears on the first page
-      await load()
-    } else {
-      // Customers cannot list orders, so confirm the placement inline instead.
-      success.value = 'Your order has been placed!'
-    }
+    success.value = 'Your order has been placed!'
+    offset.value = 0 // newest order appears on the first page
+    await load()
   } catch (e) {
     error.value = (e as Error).message
   }
@@ -155,11 +146,6 @@ onMounted(load)
         No available menu items. Add some on the Menu page first.
       </p>
       <form v-else @submit.prevent="createOrder">
-        <div class="field">
-          <label>Customer Name</label>
-          <input v-model="draft.customer_name" required maxlength="120" placeholder="e.g. Alice" />
-        </div>
-
         <label class="field-label">Items</label>
         <div v-for="(line, i) in draft.lines" :key="i" class="line">
           <select v-model="line.menu_item_id">
@@ -187,8 +173,8 @@ onMounted(load)
       </form>
     </section>
 
-    <section v-if="isStaff" class="card">
-      <h2 class="section-title">Orders ({{ total }})</h2>
+    <section class="card">
+      <h2 class="section-title">{{ isStaff ? 'Orders' : 'My Orders' }} ({{ total }})</h2>
       <p v-if="loading" class="muted">Loading…</p>
       <p v-else-if="orders.length === 0" class="muted">No orders yet.</p>
       <div v-else>
@@ -213,7 +199,7 @@ onMounted(load)
 
           <div class="order-controls">
             <strong>Total: {{ formatCents(order.total_amount) }}</strong>
-            <div class="controls-right">
+            <div v-if="isStaff" class="controls-right">
               <select
                 :value="order.status"
                 @change="changeStatus(order, ($event.target as HTMLSelectElement).value as OrderStatus)"

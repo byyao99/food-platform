@@ -192,15 +192,30 @@ func (s *Store) DeleteMenuItem(id string) error {
 
 // ---------- Order ----------
 
-// ListOrders returns a page of orders (with their items), plus the total count
-// of all orders. Defaults to newest-first by creation time.
-func (s *Store) ListOrders(opts ListOptions) ([]models.Order, int64, error) {
+// OrderFilter narrows a ListOrders query. A non-empty UserID restricts results
+// to orders placed by that account.
+type OrderFilter struct {
+	UserID string
+}
+
+// ListOrders returns a page of orders (with their items) matching filter, plus
+// the total count of matches. Defaults to newest-first by creation time.
+func (s *Store) ListOrders(opts ListOptions, filter OrderFilter) ([]models.Order, int64, error) {
+	apply := func(q *gorm.DB) *gorm.DB {
+		if filter.UserID != "" {
+			q = q.Where("user_id = ?", filter.UserID)
+		}
+		return q
+	}
+
 	var total int64
-	if err := s.db.Model(&models.Order{}).Count(&total).Error; err != nil {
+	if err := apply(s.db.Model(&models.Order{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	orders := []models.Order{}
-	q := s.db.Preload("Items").Order(orderClause(opts, orderSortColumns, "created_at", "desc")).Offset(opts.Offset)
+	q := apply(s.db.Preload("Items")).
+		Order(orderClause(opts, orderSortColumns, "created_at", "desc")).
+		Offset(opts.Offset)
 	if opts.Limit > 0 {
 		q = q.Limit(opts.Limit)
 	}

@@ -212,8 +212,7 @@ func TestOrderCreatePricingIsServerAuthoritative(t *testing.T) {
 
 	// Client sends only id + quantity (and a bogus price that must be ignored).
 	payload := map[string]any{
-		"customer_name": "Bob",
-		"items":         []map[string]any{{"menu_item_id": item.ID, "quantity": 2, "unit_price": 1}},
+		"items": []map[string]any{{"menu_item_id": item.ID, "quantity": 2, "unit_price": 1}},
 	}
 	rec := e.do(t, http.MethodPost, "/api/v1/orders", payload, customer)
 	if rec.Code != http.StatusCreated {
@@ -237,8 +236,7 @@ func TestOrderCreateRejectsUnavailableItem(t *testing.T) {
 	item := e.seedMenuItem(t, "Sold Out", 1500, false)
 	customer := e.token(t, "cust", models.RoleCustomer)
 	payload := map[string]any{
-		"customer_name": "Bob",
-		"items":         []map[string]any{{"menu_item_id": item.ID, "quantity": 1}},
+		"items": []map[string]any{{"menu_item_id": item.ID, "quantity": 1}},
 	}
 	if rec := e.do(t, http.MethodPost, "/api/v1/orders", payload, customer); rec.Code != http.StatusBadRequest {
 		t.Errorf("unavailable item: got %d, want 400", rec.Code)
@@ -252,8 +250,7 @@ func TestOrderStatusTransitionEnforced(t *testing.T) {
 	staff := e.token(t, "staff", models.RoleStaff)
 
 	rec := e.do(t, http.MethodPost, "/api/v1/orders", map[string]any{
-		"customer_name": "Bob",
-		"items":         []map[string]any{{"menu_item_id": item.ID, "quantity": 1}},
+		"items": []map[string]any{{"menu_item_id": item.ID, "quantity": 1}},
 	}, customer)
 	var order models.Order
 	decodeData(t, rec, &order)
@@ -280,6 +277,99 @@ func TestOrderListRequiresStaff(t *testing.T) {
 	}
 	if rec := e.do(t, http.MethodGet, "/api/v1/orders", nil, staff); rec.Code != http.StatusOK {
 		t.Errorf("staff listing orders: got %d, want 200", rec.Code)
+	}
+}
+
+// placeOrder creates a one-item order as the given token and returns it.
+func (e *testEnv) placeOrder(t *testing.T, item models.MenuItem, token string) models.Order {
+	t.Helper()
+	rec := e.do(t, http.MethodPost, "/api/v1/orders", map[string]any{
+		"items": []map[string]any{{"menu_item_id": item.ID, "quantity": 1}},
+	}, token)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("place order: got %d, want 201 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var order models.Order
+	decodeData(t, rec, &order)
+	return order
+}
+
+func TestOrderCreateUsesAccountIdentity(t *testing.T) {
+	e := setup(t)
+	item := e.seedMenuItem(t, "Burger", 1500, true)
+	customer := e.token(t, "alice", models.RoleCustomer)
+	alice, _ := e.s.GetUserByUsername("alice")
+
+	// A client-supplied customer_name must be ignored in favor of the account.
+	rec := e.do(t, http.MethodPost, "/api/v1/orders", map[string]any{
+		"customer_name": "Impersonated",
+		"items":         []map[string]any{{"menu_item_id": item.ID, "quantity": 1}},
+	}, customer)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: got %d, want 201 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var order models.Order
+	decodeData(t, rec, &order)
+	if order.UserID != alice.ID {
+		t.Errorf("user_id: got %q, want %q", order.UserID, alice.ID)
+	}
+	if order.CustomerName != "alice" {
+		t.Errorf("customer_name: got %q, want %q (client value must be ignored)", order.CustomerName, "alice")
+	}
+}
+
+func TestOrderGetOwnership(t *testing.T) {
+	e := setup(t)
+	item := e.seedMenuItem(t, "Burger", 1500, true)
+	alice := e.token(t, "alice", models.RoleCustomer)
+	bob := e.token(t, "bob", models.RoleCustomer)
+	staff := e.token(t, "staff", models.RoleStaff)
+	order := e.placeOrder(t, item, alice)
+	path := "/api/v1/orders/" + order.ID
+
+	if rec := e.do(t, http.MethodGet, path, nil, alice); rec.Code != http.StatusOK {
+		t.Errorf("owner reading own order: got %d, want 200", rec.Code)
+	}
+	// A different customer must not be able to read it; 404 hides its existence.
+	if rec := e.do(t, http.MethodGet, path, nil, bob); rec.Code != http.StatusNotFound {
+		t.Errorf("non-owner reading order: got %d, want 404", rec.Code)
+	}
+	if rec := e.do(t, http.MethodGet, path, nil, staff); rec.Code != http.StatusOK {
+		t.Errorf("staff reading any order: got %d, want 200", rec.Code)
+	}
+}
+
+func TestOrderMineScoping(t *testing.T) {
+	e := setup(t)
+	item := e.seedMenuItem(t, "Burger", 1500, true)
+	alice := e.token(t, "alice", models.RoleCustomer)
+	bob := e.token(t, "bob", models.RoleCustomer)
+	e.placeOrder(t, item, alice)
+	e.placeOrder(t, item, bob)
+	e.placeOrder(t, item, bob)
+
+	mineTotal := func(t *testing.T, token string) int {
+		t.Helper()
+		rec := e.do(t, http.MethodGet, "/api/v1/orders/mine", nil, token)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /orders/mine: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Pagination struct {
+				Total int `json:"total"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.Pagination.Total
+	}
+
+	if got := mineTotal(t, alice); got != 1 {
+		t.Errorf("alice's orders: got %d, want 1", got)
+	}
+	if got := mineTotal(t, bob); got != 2 {
+		t.Errorf("bob's orders: got %d, want 2", got)
 	}
 }
 

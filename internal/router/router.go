@@ -68,6 +68,7 @@ func New(s *store.Store, am *auth.Manager, log *slog.Logger) *gin.Engine {
 		o := v1.Group("/orders")
 		{
 			o.POST("", middleware.RequireAuth(am), order.Create)
+			o.GET("/mine", middleware.RequireAuth(am), order.Mine)
 			o.GET("/:id", middleware.RequireAuth(am), order.Get)
 			o.GET("", middleware.RequireRole(am, models.RoleStaff, models.RoleAdmin), order.List)
 			o.PUT("/:id", middleware.RequireRole(am, models.RoleStaff, models.RoleAdmin), order.Update)

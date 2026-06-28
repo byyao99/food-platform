@@ -80,6 +80,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string
+  user_id: string
   customer_name: string
   items: OrderItem[]
   total_amount: number
@@ -95,7 +96,6 @@ export interface OrderItemInput {
 }
 
 export interface CreateOrderInput {
-  customer_name: string
   items: OrderItemInput[]
   note: string
 }

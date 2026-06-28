@@ -104,6 +104,7 @@ type OrderItem struct {
 // Order represents a customer order.
 type Order struct {
 	ID           string      `gorm:"primaryKey" json:"id"`
+	UserID       string      `gorm:"index" json:"user_id"` // account that placed the order
 	CustomerName string      `json:"customer_name"`
 	Items        []OrderItem `gorm:"foreignKey:OrderID;constraint:OnDelete:CASCADE" json:"items"`
 	TotalAmount  int64       `json:"total_amount"` // cents

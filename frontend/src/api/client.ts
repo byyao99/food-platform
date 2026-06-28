@@ -141,6 +141,8 @@ export const menuApi = {
 export const orderApi = {
   list: (limit = 20, offset = 0) =>
     requestPage<Order>(`/orders${pageQuery(limit, offset)}`),
+  listMine: (limit = 20, offset = 0) =>
+    requestPage<Order>(`/orders/mine${pageQuery(limit, offset)}`),
   get: (id: string) => request<Order>(`/orders/${id}`),
   create: (input: CreateOrderInput) =>
     request<Order>('/orders', { method: 'POST', body: JSON.stringify(input) }),
