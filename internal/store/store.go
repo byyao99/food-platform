@@ -109,15 +109,35 @@ func translate(err error) error {
 
 // ---------- Menu ----------
 
-// ListMenu returns a page of menu items, plus the total count of all menu
-// items. Defaults to oldest-first by creation time.
-func (s *Store) ListMenu(opts ListOptions) ([]models.MenuItem, int64, error) {
+// MenuFilter narrows a ListMenu query. Zero-value fields are ignored. Category
+// matches case-insensitively (exact); Available, when set, filters by serving
+// status.
+type MenuFilter struct {
+	Category  string
+	Available *bool
+}
+
+// ListMenu returns a page of menu items matching filter, plus the total count of
+// matches. Defaults to oldest-first by creation time.
+func (s *Store) ListMenu(opts ListOptions, filter MenuFilter) ([]models.MenuItem, int64, error) {
+	apply := func(q *gorm.DB) *gorm.DB {
+		if filter.Category != "" {
+			q = q.Where("LOWER(category) = LOWER(?)", filter.Category)
+		}
+		if filter.Available != nil {
+			q = q.Where("available = ?", *filter.Available)
+		}
+		return q
+	}
+
 	var total int64
-	if err := s.db.Model(&models.MenuItem{}).Count(&total).Error; err != nil {
+	if err := apply(s.db.Model(&models.MenuItem{})).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	items := []models.MenuItem{}
-	q := s.db.Order(orderClause(opts, menuSortColumns, "created_at", "asc")).Offset(opts.Offset)
+	q := apply(s.db.Model(&models.MenuItem{})).
+		Order(orderClause(opts, menuSortColumns, "created_at", "asc")).
+		Offset(opts.Offset)
 	if opts.Limit > 0 {
 		q = q.Limit(opts.Limit)
 	}

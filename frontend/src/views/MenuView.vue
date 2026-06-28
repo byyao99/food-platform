@@ -14,6 +14,10 @@ const offset = ref(0)
 const loading = ref(false)
 const error = ref('')
 
+// Category filter (empty = all). Customers also only ever see available items;
+// admins see everything so they can manage unavailable ones.
+const categoryFilter = ref('')
+
 // editingId is null when the form is creating a new item.
 const editingId = ref<string | null>(null)
 
@@ -29,7 +33,10 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const page = await menuApi.list(PAGE_SIZE, offset.value)
+    const page = await menuApi.list(PAGE_SIZE, offset.value, {
+      category: categoryFilter.value.trim() || undefined,
+      available: isAdmin.value ? undefined : true,
+    })
     items.value = page.items
     total.value = page.pagination.total
     // If a deletion emptied the current page, step back one page.
@@ -46,6 +53,12 @@ async function load() {
 
 function changePage(newOffset: number) {
   offset.value = newOffset
+  load()
+}
+
+// applyFilter restarts paging from the first page whenever the filter changes.
+function applyFilter() {
+  offset.value = 0
   load()
 }
 
@@ -141,7 +154,25 @@ onMounted(load)
     </section>
 
     <section class="card">
-      <h2 class="section-title">Menu ({{ total }})</h2>
+      <div class="menu-head">
+        <h2 class="section-title">Menu ({{ total }})</h2>
+        <div class="filter">
+          <input
+            v-model="categoryFilter"
+            placeholder="Filter by category"
+            maxlength="60"
+            @keyup.enter="applyFilter"
+          />
+          <button class="btn-secondary" @click="applyFilter">Filter</button>
+          <button
+            v-if="categoryFilter"
+            class="btn-secondary"
+            @click="categoryFilter = ''; applyFilter()"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
       <p v-if="loading" class="muted">Loading…</p>
       <p v-else-if="items.length === 0" class="muted">No menu items yet.</p>
       <table v-else>
@@ -206,6 +237,20 @@ onMounted(load)
 .row-actions {
   display: flex;
   gap: 8px;
+}
+.menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filter {
+  display: flex;
+  gap: 8px;
+}
+.filter input {
+  width: auto;
 }
 .badge {
   font-size: 12px;

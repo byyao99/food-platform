@@ -118,9 +118,18 @@ export const userApi = {
   remove: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
 }
 
+export interface MenuFilter {
+  category?: string
+  available?: boolean
+}
+
 export const menuApi = {
-  list: (limit = 20, offset = 0) =>
-    requestPage<MenuItem>(`/menu${pageQuery(limit, offset)}`),
+  list: (limit = 20, offset = 0, filter: MenuFilter = {}) => {
+    let query = pageQuery(limit, offset)
+    if (filter.category) query += `&category=${encodeURIComponent(filter.category)}`
+    if (filter.available !== undefined) query += `&available=${filter.available}`
+    return requestPage<MenuItem>(`/menu${query}`)
+  },
   get: (id: string) => request<MenuItem>(`/menu/${id}`),
   create: (input: MenuItemInput) =>
     request<MenuItem>('/menu', { method: 'POST', body: JSON.stringify(input) }),

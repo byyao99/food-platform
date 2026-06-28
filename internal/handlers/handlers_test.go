@@ -131,6 +131,80 @@ func TestMenuCreateRequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestMenuListFiltering(t *testing.T) {
+	e := setup(t)
+	// seedMenuItem always uses category "Main"; vary only name and availability.
+	e.seedMenuItem(t, "Burger", 1500, true)
+	e.seedMenuItem(t, "Cola", 300, true)
+	e.seedMenuItem(t, "Sold Out", 900, false)
+
+	total := func(t *testing.T, path string) int {
+		t.Helper()
+		rec := e.do(t, http.MethodGet, path, nil, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: got %d, want 200 (body: %s)", path, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Pagination struct {
+				Total int `json:"total"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.Pagination.Total
+	}
+
+	// seedMenuItem uses category "Main"; all three share it (case-insensitive).
+	if got := total(t, "/api/v1/menu?category=main"); got != 3 {
+		t.Errorf("category=main total: got %d, want 3", got)
+	}
+	// Only the two available items show when filtering available=true.
+	if got := total(t, "/api/v1/menu?available=true"); got != 2 {
+		t.Errorf("available=true total: got %d, want 2", got)
+	}
+	if got := total(t, "/api/v1/menu?available=false"); got != 1 {
+		t.Errorf("available=false total: got %d, want 1", got)
+	}
+	// A non-boolean available value is rejected.
+	if rec := e.do(t, http.MethodGet, "/api/v1/menu?available=maybe", nil, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("available=maybe: got %d, want 400", rec.Code)
+	}
+}
+
+func TestMenuUpdateRequiresAvailable(t *testing.T) {
+	e := setup(t)
+	admin := e.token(t, "admin", models.RoleAdmin)
+	item := e.seedMenuItem(t, "Burger", 1500, false) // starts unavailable
+
+	// Omitting "available" on update is rejected (would otherwise re-enable it).
+	noAvail := map[string]any{"name": "Burger", "price": 1500, "category": "Main"}
+	if rec := e.do(t, http.MethodPut, "/api/v1/menu/"+item.ID, noAvail, admin); rec.Code != http.StatusBadRequest {
+		t.Errorf("update without available: got %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	// Explicit available is honored.
+	withAvail := map[string]any{"name": "Burger", "price": 1500, "category": "Main", "available": false}
+	rec := e.do(t, http.MethodPut, "/api/v1/menu/"+item.ID, withAvail, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update with available: got %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var updated models.MenuItem
+	decodeData(t, rec, &updated)
+	if updated.Available {
+		t.Error("item should remain unavailable")
+	}
+}
+
+func TestMenuCreateRejectsExcessivePrice(t *testing.T) {
+	e := setup(t)
+	admin := e.token(t, "admin", models.RoleAdmin)
+	payload := map[string]any{"name": "Gold Burger", "price": 100000001, "category": "Main"}
+	if rec := e.do(t, http.MethodPost, "/api/v1/menu", payload, admin); rec.Code != http.StatusBadRequest {
+		t.Errorf("excessive price: got %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
 func TestOrderCreatePricingIsServerAuthoritative(t *testing.T) {
 	e := setup(t)
 	item := e.seedMenuItem(t, "Burger", 1500, true)

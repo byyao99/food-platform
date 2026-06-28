@@ -59,7 +59,8 @@ async function load() {
   error.value = ''
   try {
     // Everyone needs the menu to build an order; only staff may list all orders.
-    const menuPage = await menuApi.list(MENU_FETCH_LIMIT, 0)
+    // Only available items can be ordered, so fetch just those.
+    const menuPage = await menuApi.list(MENU_FETCH_LIMIT, 0, { available: true })
     menu.value = menuPage.items
 
     if (isStaff.value) {

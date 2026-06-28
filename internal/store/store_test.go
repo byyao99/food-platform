@@ -59,7 +59,7 @@ func TestListMenuPaginationAndTotal(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		seedMenuItem(t, s, string(rune('a'+i)), int64(100+i), true)
 	}
-	items, total, err := s.ListMenu(ListOptions{Limit: 2, Offset: 0})
+	items, total, err := s.ListMenu(ListOptions{Limit: 2, Offset: 0}, MenuFilter{})
 	if err != nil {
 		t.Fatalf("ListMenu: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestListMenuRejectsUnknownSortColumn(t *testing.T) {
 	seedMenuItem(t, s, "Burger", 1200, true)
 	// A would-be injection string is not in the allowlist, so it must be ignored
 	// rather than reaching SQL. The query should still succeed.
-	if _, _, err := s.ListMenu(ListOptions{Limit: 10, Sort: "price; DROP TABLE menu_items;--"}); err != nil {
+	if _, _, err := s.ListMenu(ListOptions{Limit: 10, Sort: "price; DROP TABLE menu_items;--"}, MenuFilter{}); err != nil {
 		t.Fatalf("ListMenu with malicious sort should fall back safely, got %v", err)
 	}
 }
